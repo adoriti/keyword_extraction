@@ -1,15 +1,15 @@
-# keyword extraction ----
+# ------ keyword extraction ----- #
 # developer: Afroditi Doriti
-# version: 1.2
-# changes: used only title and abstract, used a sample of 1000 papers
+# version: 3.0
+# changes: prunned the tree not into 5 branches, but 1000
 # description: keyword clustering, subsequent keyword extraction
 # input: polymers_renewable.csv
 # data ownership: MAPEGY
-# -------------------------------
+# ------------------------------- #
 # outputs:
-# -------------------------------
+# ------------------------------- #
 
-# load packages
+# load packages ----
 library("tidyverse")
 library("tm")
 library("SnowballC")
@@ -18,6 +18,7 @@ library("SnowballC")
 # new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
 # if(length(new.packages)) install.packages(new.packages)
 
+# set wd and import files ----
 # set wd
 setwd("/home/adoriti/Documents/Keyword extraction")
 
@@ -27,6 +28,7 @@ input_file <- "polymers_renewable.csv"
 # read file:
 data <- read.csv(input_file, stringsAsFactors = FALSE, sep = ";")
 
+# Data preprocessing ----
 # create dataframe only with title and abstract
 relevant_data <-
   data.frame(
@@ -40,7 +42,7 @@ set.seed(1988)
 sampled <- sample(nrow(relevant_data), 1000)
 
 # Create corpus
-docs <- Corpus(DataframeSource(relevant_data[sampled, ]))
+docs <- Corpus(DataframeSource(relevant_data[sampled,]))
 
 #Transform to lower case
 docs <- tm_map(docs, content_transformer(tolower))
@@ -93,31 +95,33 @@ docs <- tm_map(docs, stemDocument, mc.cores = 1)
 #   In mclapply(content(x), FUN, ...) :
 #   all scheduled cores encountered errors in user code
 
+# Hierarchical Clustering ----
 # create DocumentTermMatrix
 dtm <- DocumentTermMatrix(docs)
 dtm
 
-#convert dtm to matrix
+# convert dtm to matrix
 m <- as.matrix(dtm)
-#write as csv file (optional)
+# write as csv file (optional)
 write.csv(m, file = "dtmatrix1000.csv")
 
 #compute distance between document vectors
 d <- dist(m)
 
-#run hierarchical clustering using Wardâs method
+# run hierarchical clustering using Wardâs method
 groups <- hclust(d, method = "ward.D")
-#plot dendogram, use hang to ensure that labels fall below tree
+# plot dendogram, use hang to ensure that labels fall below tree
 plot(groups, hang = -1)
 
-#cut into 5 subtrees â try 3 and 5
+# cut into 5 subtrees
 rect.hclust(groups, 5)
 
 # cut the tree into 5 clusters
-cut <- cutree(groups, k = 5)
+cut <- cutree(groups, k = 999)
 
+# Concatenate results ----
 # add cluster info to the dataframe
-datadf <- cbind(relevant_data[sampled, ], cluster = cut)
+datadf <- cbind(relevant_data[sampled,], cluster = cut)
 
 # arrange according to cluster
 datadf <- datadf %>% arrange(cluster)
@@ -131,4 +135,7 @@ to_analyze <- datadf %>% unite(title, abstract)
 # concatenate results
 text <- paste(to_analyze, collapse = " ")
 
+# make a matrix with all the text and all the words
+# create a corpus
+corpus <- VCorpus(VectorSource(text))
 
