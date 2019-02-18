@@ -1,7 +1,7 @@
 # keyword extraction ----
 # developer: Afroditi Doriti
-# version: 1.1
-# changes: used only title and abstract
+# version: 1.2
+# changes: used only title and abstract, used a sample of 1000 papers
 # description: keyword clustering, subsequent keyword extraction
 # input: polymers_renewable.csv
 # data ownership: MAPEGY
@@ -28,10 +28,19 @@ input_file <- "polymers_renewable.csv"
 data <- read.csv(input_file, stringsAsFactors = FALSE, sep = ";")
 
 # create dataframe only with title and abstract
-relevant_data <- data.frame(title = data$title, abstract = data$abstract, stringsAsFactors = FALSE)
+relevant_data <-
+  data.frame(
+    title = data$title,
+    abstract = data$abstract,
+    stringsAsFactors = FALSE
+  )
+
+# create a sample of 1000 documents to check
+set.seed(1988)
+sampled <- sample(nrow(relevant_data), 1000)
 
 # Create corpus
-docs <- Corpus(DataframeSource(relevant_data))
+docs <- Corpus(DataframeSource(relevant_data[sampled, ]))
 
 #Transform to lower case
 docs <- tm_map(docs, content_transformer(tolower))
@@ -41,6 +50,8 @@ toSpace <-
   content_transformer(function(x, pattern) {
     return (gsub(pattern, " ", x))
   })
+docs <- tm_map(docs, toSpace, "http[[:alnum:][:punct:]]*")
+docs <- tm_map(docs, toSpace, "www[[:alnum:][:punct:]]*")
 docs <- tm_map(docs, toSpace, "-")
 docs <- tm_map(docs, toSpace, ":")
 docs <- tm_map(docs, toSpace, "â")
@@ -57,12 +68,15 @@ docs <- tm_map(docs, removePunctuation)
 docs <- tm_map(docs, removeNumbers)
 
 # remove words in other alphabets
-docs <- tm_map(docs, content_transformer(function(s){
-  gsub(pattern = '[^a-zA-Z0-9\\s]+',
-       x = s,
-       replacement = " ",
-       ignore.case = TRUE,
-       perl = TRUE)}))
+docs <- tm_map(docs, content_transformer(function(s) {
+  gsub(
+    pattern = '[^a-zA-Z0-9\\s]+',
+    x = s,
+    replacement = " ",
+    ignore.case = TRUE,
+    perl = TRUE
+  )
+}))
 
 #remove stopwords
 docs <- tm_map(docs, removeWords, stopwords("english"))
@@ -86,7 +100,35 @@ dtm
 #convert dtm to matrix
 m <- as.matrix(dtm)
 #write as csv file (optional)
-write.csv(m, file = "dtmatrix.csv")
+write.csv(m, file = "dtmatrix1000.csv")
 
 #compute distance between document vectors
 d <- dist(m)
+
+#run hierarchical clustering using Wardâs method
+groups <- hclust(d, method = "ward.D")
+#plot dendogram, use hang to ensure that labels fall below tree
+plot(groups, hang = -1)
+
+#cut into 5 subtrees â try 3 and 5
+rect.hclust(groups, 5)
+
+# cut the tree into 5 clusters
+cut <- cutree(groups, k = 5)
+
+# add cluster info to the dataframe
+datadf <- cbind(relevant_data[sampled, ], cluster = cut)
+
+# arrange according to cluster
+datadf <- datadf %>% arrange(cluster)
+
+# remove cluster
+datadf$cluster <- NULL
+
+# merge columns
+to_analyze <- datadf %>% unite(title, abstract)
+
+# concatenate results
+text <- paste(to_analyze, collapse = " ")
+
+
