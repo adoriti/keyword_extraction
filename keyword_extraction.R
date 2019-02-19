@@ -1,8 +1,7 @@
 # ------ keyword extraction ----- #
 # developer: Afroditi Doriti
-# version: 5.0
-# changes: did not concatenate the text, kept it in texts and checked for keywords
-#          using tidytext and tf-idf
+# version: 5.2
+# changes: used lda for clustering
 # description: keyword clustering, subsequent keyword extraction
 # input: polymers_renewable.csv
 # data ownership: MAPEGY
@@ -16,6 +15,7 @@ library("tm")
 library("SnowballC")
 library("doParallel")
 library("tidytext")
+library("topicmodels")
 
 # list.of.packages <- c("ggplot2", "Rcpp")
 # new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
@@ -23,7 +23,7 @@ library("tidytext")
 
 # use doParallel for speed ----
 # Choose a number of cores to use (1 less than detected)
-no_cores <- detectCores() -1 
+no_cores <- detectCores() - 1
 
 # Create Cluster with desired number of cores. Don't use them all! Your computer is running other processes.
 cl <- makeCluster(no_cores, type = "FORK")
@@ -32,7 +32,7 @@ cl <- makeCluster(no_cores, type = "FORK")
 registerDoParallel(cl)
 
 # Confirm how many cores are now "assigned" to R and RStudio
-getDoParWorkers() 
+getDoParWorkers()
 
 # set wd and import files ----
 # set wd
@@ -45,20 +45,19 @@ input_file <- "polymers_renewable.csv"
 data <- read.csv(input_file, stringsAsFactors = FALSE, sep = ";")
 
 # Data preprocessing ----
+# sort data according to score_relevance
+data <- data %>% arrange(score_relevance)
+
 # create dataframe only with title and abstract
 relevant_data <-
   data.frame(
-    title = data$title,
-    abstract = data$abstract,
-    stringsAsFactors = FALSE
+    title = data$title[1:1000],
+    abstract = data$abstract[1:1000,
+                             stringsAsFactors = FALSE
   )
 
-# create a sample of 1000 documents to check
-set.seed(1988)
-sampled <- sample(nrow(relevant_data), 1000)
-
 # Create corpus
-docs <- Corpus(DataframeSource(relevant_data[sampled,]))
+docs <- Corpus(DataframeSource(relevant_data))
 
 #Transform to lower case
 docs <- tm_map(docs, content_transformer(tolower))
@@ -130,7 +129,7 @@ groups <- hclust(d, method = "ward.D")
 plot(groups, hang = -1)
 
 # set number of subtrees to nrow/10
-num_subtrees <- nrow(relevant_data[sampled,]) / 10
+num_subtrees <- round(nrow(relevant_data) / 10)
 
 # cut into subtrees
 rect.hclust(groups, num_subtrees)
@@ -140,23 +139,27 @@ cut <- cutree(groups, k = num_subtrees)
 
 # Analyze clusters with tf-idf ----
 # add cluster info to the dataframe
-datadf <- cbind(relevant_data[sampled,], cluster = cut)
+datadf <- cbind(relevant_data, cluster = cut)
 
-# arrange according to cluster 
+# arrange according to cluster
 datadf <- datadf %>% arrange(cluster)
 
 # merge title and abstract
 to_analyze <- datadf %>% unite(texts, title, abstract, sep = " ")
 
-# tokenize the texts
+# (optional) write the results in a csv
+write.csv(to_analyze, "to_analyze.csv")
+
+# tokenize the texts and avoid stopwords
 text_words <- to_analyze %>%
   unnest_tokens(words, texts) %>%
+  filter(!words %in% stop_words$word) %>%
   count(cluster, words, sort = TRUE) %>%
   ungroup()
 
 # check total words per cluster
-total_words <- text_words %>% 
-  group_by(cluster) %>% 
+total_words <- text_words %>%
+  group_by(cluster) %>%
   summarize(total = sum(n))
 
 text_words <- left_join(text_words, total_words)
@@ -173,15 +176,15 @@ text_words <- text_words %>%
   arrange(desc(tf_idf))
 
 # plot most important words
-text_words[text_words$cluster %in% 1:10,] %>%
-  mutate(words = factor(words, levels = rev(unique(words)))) %>% 
-  group_by(cluster) %>% 
-  top_n(5) %>% 
+text_words[text_words$cluster %in% 1:10, ] %>%
+  mutate(words = factor(words, levels = rev(unique(words)))) %>%
+  group_by(cluster) %>%
+  top_n(5) %>%
   ungroup %>%
   ggplot(aes(words, tf_idf)) +
   geom_col(show.legend = FALSE, fill = "grey53") +
   labs(x = NULL, y = "tf-idf") +
-  facet_wrap(~cluster, ncol = 2, scales = "free") +
+  facet_wrap( ~ cluster, ncol = 2, scales = "free") +
   coord_flip()
 
 # write csv with results
@@ -193,6 +196,7 @@ text_bigrams <- to_analyze %>%
   unnest_tokens(bigrams, texts, token = "ngrams", n = 2)
 
 head(text_bigrams)
+text_bigrams$bigrams
 
 # sort the bigrams
 text_bigrams %>%
@@ -207,7 +211,7 @@ bigrams_filtered <- bigrams_separated %>%
   filter(!word2 %in% stop_words$word)
 
 # new bigram counts:
-bigram_counts <- bigrams_filtered %>% 
+bigram_counts <- bigrams_filtered %>%
   count(word1, word2, sort = TRUE)
 
 bigram_counts
@@ -222,9 +226,7 @@ head(bigrams_united, 50)
 text_trigrams <- to_analyze %>%
   unnest_tokens(trigrams, texts, token = "ngrams", n = 3) %>%
   separate(trigrams, c("word1", "word2", "word3"), sep = " ") %>%
-  filter(!word1 %in% stop_words$word,
-         !word2 %in% stop_words$word,
-         !word3 %in% stop_words$word) %>%
+  filter(!word1 %in% stop_words$word,!word2 %in% stop_words$word,!word3 %in% stop_words$word) %>%
   count(cluster, word1, word2, word3, sort = TRUE) %>%
   unite(trigrams, word1, word2, word3, sep = " ")
 
@@ -242,6 +244,13 @@ bigram_tf_idf
 trigram_tf_idf <- text_trigrams %>%
   bind_tf_idf(trigrams, cluster, n) %>%
   arrange(desc(tf_idf))
+
+trigram_tf_idf
+
+# all important results ----
+text_words
+
+bigram_tf_idf
 
 trigram_tf_idf
 
