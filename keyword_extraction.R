@@ -1,7 +1,8 @@
 # ------ keyword extraction ----- #
 # developer: Afroditi Doriti
-# version: 5.2
-# changes: used lda for clustering
+# version: 5.0
+# changes: did not concatenate the text, kept it in texts and checked for keywords
+#          using tidytext and tf-idf
 # description: keyword clustering, subsequent keyword extraction
 # input: polymers_renewable.csv
 # data ownership: MAPEGY
@@ -15,7 +16,6 @@ library("tm")
 library("SnowballC")
 library("doParallel")
 library("tidytext")
-library("topicmodels")
 
 # list.of.packages <- c("ggplot2", "Rcpp")
 # new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
@@ -46,14 +46,14 @@ data <- read.csv(input_file, stringsAsFactors = FALSE, sep = ";")
 
 # Data preprocessing ----
 # sort data according to score_relevance
-data <- data %>% arrange(score_relevance)
+data <- data %>% arrange(desc(score_relevance))
 
 # create dataframe only with title and abstract
 relevant_data <-
   data.frame(
     title = data$title[1:1000],
-    abstract = data$abstract[1:1000,
-                             stringsAsFactors = FALSE
+    abstract = data$abstract[1:1000],
+    stringsAsFactors = FALSE
   )
 
 # Create corpus
@@ -253,6 +253,9 @@ text_words
 bigram_tf_idf
 
 trigram_tf_idf
+
+# show keywords
+
 
 # Stop Cluster ----
 stopCluster(cl)
