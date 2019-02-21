@@ -36,10 +36,10 @@ registerDoParallel(cl)
 
 # set wd and import files ----
 # set wd
-setwd("/home/adoriti/Documents/Testing")
+setwd("/home/adoriti/Documents/Keyword extraction")
 
 # define input file:
-input_file <- "ABC_text_clustering.csv"
+input_file <- "polymers_renewable.csv"
 
 # read file:
 data <- read.csv(input_file, stringsAsFactors = FALSE, sep = ";")
@@ -156,6 +156,7 @@ to_analyze <- datadf %>% unite(texts, title, abstract, sep = " ")
 text_words <- to_analyze %>%
   unnest_tokens(words, texts) %>%
   filter(!words %in% stop_words$word) %>%
+  filter(is.na(as.numeric(words))) %>%
   count(cluster, words, sort = TRUE) %>%
   ungroup()
 
@@ -183,7 +184,8 @@ text_words <- text_words %>%
 text_bigrams <- to_analyze %>%
   unnest_tokens(bigrams, texts, token = "ngrams", n = 2) %>%
   separate(bigrams, c("word1", "word2"), sep = " ") %>%
-  filter(!word1 %in% stop_words$word,!word2 %in% stop_words$word) %>%
+  filter(!word1 %in% stop_words$word, !word2 %in% stop_words$word) %>%
+  filter(is.na(as.numeric(word1)), is.na(as.numeric(word2))) %>%
   count(cluster, word1, word2, sort = TRUE) %>%
   unite(bigrams, word1, word2, sep = " ")
 
@@ -191,7 +193,11 @@ text_bigrams <- to_analyze %>%
 text_trigrams <- to_analyze %>%
   unnest_tokens(trigrams, texts, token = "ngrams", n = 3) %>%
   separate(trigrams, c("word1", "word2", "word3"), sep = " ") %>%
-  filter(!word1 %in% stop_words$word,!word2 %in% stop_words$word,!word3 %in% stop_words$word) %>%
+  filter(!word1 %in% stop_words$word,
+         !word2 %in% stop_words$word,
+         !word3 %in% stop_words$word) %>%
+  filter(is.na(as.numeric(word1)), is.na(as.numeric(word2)),
+         is.na(as.numeric(word3))) %>%
   count(cluster, word1, word2, word3, sort = TRUE) %>%
   unite(trigrams, word1, word2, word3, sep = " ")
 
@@ -200,9 +206,8 @@ text_tetragrams <- to_analyze %>%
   unnest_tokens(tetragrams, texts, token = "ngrams", n = 4) %>%
   separate(tetragrams, c("word1", "word2", "word3", "word4"), sep = " ") %>%
   filter(
-    !word1 %in% stop_words$word,
-    !word2 %in% stop_words$word,!word3 %in% stop_words$word,
-    !word4 %in% stop_words$word
+    !word1 %in% stop_words$word,!word2 %in% stop_words$word,
+    !word3 %in% stop_words$word,!word4 %in% stop_words$word
   ) %>%
   count(cluster, word1, word2, word3, word4, sort = TRUE) %>%
   unite(tetragrams, word1, word2, word3, word4, sep = " ")
@@ -260,7 +265,7 @@ final_bigrams <- bigram_tf_idf %>%
 
 
 # show keywords with n >= 15
-for(i in 1:10) {
+for (i in 1:10) {
   if (final_text_words$n[i] >= 15) {
     print(final_text_words$words[i])
   }
