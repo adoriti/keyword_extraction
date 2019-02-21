@@ -3,7 +3,7 @@
 # version: 6.0
 # changes: used tidytext for keyword extraction, analyzed words,
 #          bigrams, trigrams, and tetragrams
-# description: keyword clustering, subsequent keyword extraction, tf-idf
+# description: keyword clustering, subsequent keyword extraction
 # input: polymers_renewable.csv
 # data ownership: MAPEGY
 # ------------------------------- #
@@ -36,10 +36,10 @@ registerDoParallel(cl)
 
 # set wd and import files ----
 # set wd
-setwd("/home/adoriti/Documents/Keyword extraction")
+setwd("/home/adoriti/Documents/Testing")
 
 # define input file:
-input_file <- "polymers_renewable.csv"
+input_file <- "ABC_text_clustering.csv"
 
 # read file:
 data <- read.csv(input_file, stringsAsFactors = FALSE, sep = ";")
@@ -157,7 +157,7 @@ text_words <- to_analyze %>%
   unnest_tokens(words, texts) %>%
   filter(!words %in% stop_words$word) %>%
   count(cluster, words, sort = TRUE) %>%
-  mutate(words = wordStem(words)) 
+  ungroup()
 
 # check total words per cluster
 total_words <- text_words %>%
@@ -184,8 +184,6 @@ text_bigrams <- to_analyze %>%
   unnest_tokens(bigrams, texts, token = "ngrams", n = 2) %>%
   separate(bigrams, c("word1", "word2"), sep = " ") %>%
   filter(!word1 %in% stop_words$word,!word2 %in% stop_words$word) %>%
-  mutate(word1 = wordStem(word1)) %>%
-  mutate(word2 = wordStem(word2)) %>%
   count(cluster, word1, word2, sort = TRUE) %>%
   unite(bigrams, word1, word2, sep = " ")
 
@@ -195,9 +193,6 @@ text_trigrams <- to_analyze %>%
   separate(trigrams, c("word1", "word2", "word3"), sep = " ") %>%
   filter(!word1 %in% stop_words$word,!word2 %in% stop_words$word,!word3 %in% stop_words$word) %>%
   count(cluster, word1, word2, word3, sort = TRUE) %>%
-  mutate(word1 = wordStem(word1)) %>%
-  mutate(word2 = wordStem(word2)) %>%
-  mutate(word3 = wordStem(word3)) %>%
   unite(trigrams, word1, word2, word3, sep = " ")
 
 # check for tetragrams:
@@ -210,10 +205,6 @@ text_tetragrams <- to_analyze %>%
     !word4 %in% stop_words$word
   ) %>%
   count(cluster, word1, word2, word3, word4, sort = TRUE) %>%
-  mutate(word1 = wordStem(word1)) %>%
-  mutate(word2 = wordStem(word2)) %>%
-  mutate(word3 = wordStem(word3)) %>%
-  mutate(word4 = wordStem(word4)) %>%
   unite(tetragrams, word1, word2, word3, word4, sep = " ")
 
 # bigrams analysis with tf-idf
