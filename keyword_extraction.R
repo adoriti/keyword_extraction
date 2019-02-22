@@ -16,10 +16,15 @@ library("tm")
 library("SnowballC")
 library("doParallel")
 library("tidytext")
+library("tictoc")
 
 # list.of.packages <- c("ggplot2", "Rcpp")
 # new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
 # if(length(new.packages)) install.packages(new.packages)
+
+# start measuring time
+tic("total")
+tic("preprocessing")
 
 # use doParallel for speed ----
 # Choose a number of cores to use (1 less than detected)
@@ -139,6 +144,12 @@ num_subtrees <- round(nrow(relevant_data) / 10)
 # cut the tree into nrow/10 clusters
 cut <- cutree(groups, k = num_subtrees)
 
+# time for preprocessing
+preprocessing <- toc()
+
+# time for keyword extraction
+tic("keyword extraction")
+
 # Analyze clusters with tf-idf ----
 # add cluster info to the dataframe
 datadf <- cbind(relevant_data, cluster = cut)
@@ -184,7 +195,7 @@ text_words <- text_words %>%
 text_bigrams <- to_analyze %>%
   unnest_tokens(bigrams, texts, token = "ngrams", n = 2) %>%
   separate(bigrams, c("word1", "word2"), sep = " ") %>%
-  filter(!word1 %in% stop_words$word, !word2 %in% stop_words$word) %>%
+  filter(!word1 %in% stop_words$word,!word2 %in% stop_words$word) %>%
   filter(is.na(as.numeric(word1)), is.na(as.numeric(word2))) %>%
   count(cluster, word1, word2, sort = TRUE) %>%
   unite(bigrams, word1, word2, sep = " ")
@@ -193,9 +204,7 @@ text_bigrams <- to_analyze %>%
 text_trigrams <- to_analyze %>%
   unnest_tokens(trigrams, texts, token = "ngrams", n = 3) %>%
   separate(trigrams, c("word1", "word2", "word3"), sep = " ") %>%
-  filter(!word1 %in% stop_words$word,
-         !word2 %in% stop_words$word,
-         !word3 %in% stop_words$word) %>%
+  filter(!word1 %in% stop_words$word,!word2 %in% stop_words$word,!word3 %in% stop_words$word) %>%
   filter(is.na(as.numeric(word1)), is.na(as.numeric(word2)),
          is.na(as.numeric(word3))) %>%
   count(cluster, word1, word2, word3, sort = TRUE) %>%
@@ -206,8 +215,9 @@ text_tetragrams <- to_analyze %>%
   unnest_tokens(tetragrams, texts, token = "ngrams", n = 4) %>%
   separate(tetragrams, c("word1", "word2", "word3", "word4"), sep = " ") %>%
   filter(
-    !word1 %in% stop_words$word,!word2 %in% stop_words$word,
-    !word3 %in% stop_words$word,!word4 %in% stop_words$word
+    !word1 %in% stop_words$word,
+    !word2 %in% stop_words$word,!word3 %in% stop_words$word,
+    !word4 %in% stop_words$word
   ) %>%
   count(cluster, word1, word2, word3, word4, sort = TRUE) %>%
   unite(tetragrams, word1, word2, word3, word4, sep = " ")
@@ -291,6 +301,12 @@ for (i in 1:10) {
     print(tetragram_tf_idf$tetragrams[i])
   }
 }
+
+# time elapsed for keyword extraction
+keyword_extraction <- toc()
+
+# total time elapsed()
+total_time <- toc()
 
 # Stop Cluster ----
 stopCluster(cl)
