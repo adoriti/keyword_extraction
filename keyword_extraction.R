@@ -1,8 +1,7 @@
-# ------ keyword extraction ----- #
+# ------ keyword extraction without clustering ----- #
 # developer: Afroditi Doriti
-# version: 6.0
-# changes: used tidytext for keyword extraction, analyzed words,
-#          bigrams, trigrams, and tetragrams
+# version: 1
+# changes: used no clustering. Directly tf-idf
 # description: keyword clustering, subsequent keyword extraction
 # input: polymers_renewable.csv
 # data ownership: MAPEGY
@@ -12,7 +11,6 @@
 
 # load packages ----
 library("tidyverse")
-library("tm")
 library("SnowballC")
 library("doParallel")
 library("tidytext")
@@ -24,7 +22,6 @@ library("tictoc")
 
 # start measuring time
 tic("total")
-tic("preprocessing")
 
 # use doParallel for speed ----
 # Choose a number of cores to use (1 less than detected)
@@ -61,104 +58,11 @@ relevant_data <-
     stringsAsFactors = FALSE
   )
 
-# Create corpus
-docs <- Corpus(DataframeSource(relevant_data))
-
-#Transform to lower case
-docs <- tm_map(docs, content_transformer(tolower))
-
-#remove potentiallyy problematic symbols
-toSpace <-
-  content_transformer(function(x, pattern) {
-    return (gsub(pattern, " ", x))
-  })
-docs <- tm_map(docs, toSpace, "http[[:alnum:][:punct:]]*")
-docs <- tm_map(docs, toSpace, "www[[:alnum:][:punct:]]*")
-docs <- tm_map(docs, toSpace, "-")
-docs <- tm_map(docs, toSpace, ":")
-docs <- tm_map(docs, toSpace, "â")
-docs <- tm_map(docs, toSpace, "â¢")
-docs <- tm_map(docs, toSpace, "â¢    ")
-docs <- tm_map(docs, toSpace, " -")
-docs <- tm_map(docs, toSpace, "â")
-docs <- tm_map(docs, toSpace, "â")
-
-#remove punctuation
-docs <- tm_map(docs, removePunctuation)
-
-#Strip digits
-docs <- tm_map(docs, removeNumbers)
-
-# remove words in other alphabets
-docs <- tm_map(docs, content_transformer(function(s) {
-  gsub(
-    pattern = '[^a-zA-Z0-9\\s]+',
-    x = s,
-    replacement = " ",
-    ignore.case = TRUE,
-    perl = TRUE
-  )
-}))
-
-#remove stopwords
-docs <- tm_map(docs, removeWords, stopwords("english"))
-
-#remove whitespace
-docs <- tm_map(docs, stripWhitespace)
-
-# create backup
-backup <- docs
-
-# stem the words - i.e. truncate words to their base form
-docs <- tm_map(docs, stemDocument, mc.cores = 1)
-# if mc.cores=1 not used: Warning message:
-#   In mclapply(content(x), FUN, ...) :
-#   all scheduled cores encountered errors in user code
-
-# create backup
-backup <- docs
-
-# Hierarchical Clustering ----
-# create DocumentTermMatrix
-dtm <- DocumentTermMatrix(docs)
-
-# convert dtm to matrix
-m <- as.matrix(dtm)
-# write as csv file (optional)
-# write.csv(m, file = "dtmatrix1000.csv")
-
-#compute distance between document vectors
-d <- dist(m)
-
-# run hierarchical clustering using Wardâs method
-groups <- hclust(d, method = "ward.D")
-# plot dendogram, use hang to ensure that labels fall below tree
-# plot(groups, hang = -1)
-
-# set number of subtrees to nrow/10
-num_subtrees <- round(nrow(relevant_data) / 10)
-
-# cut into subtrees
-# rect.hclust(groups, num_subtrees)
-
-# cut the tree into nrow/10 clusters
-cut <- cutree(groups, k = num_subtrees)
-
-# time for preprocessing
-preprocessing <- toc()
-
-# time for keyword extraction
-tic("keyword extraction")
-
-# Analyze clusters with tf-idf ----
-# add cluster info to the dataframe
-datadf <- cbind(relevant_data, cluster = cut)
-
-# arrange according to cluster
-datadf <- datadf %>% arrange(cluster)
-
 # merge title and abstract
-to_analyze <- datadf %>% unite(texts, title, abstract, sep = " ")
+to_analyze <- relevant_data %>% unite(texts, title, abstract, sep = " ")
+
+# add document number
+to_analyze$cluster <- rownames(to_analyze)
 
 # (optional) write the results in a csv
 # write.csv(to_analyze, "to_analyze.csv")
