@@ -1,7 +1,7 @@
-# ------ keyword extraction without clustering ----- #
+# ------ keyword extraction ----- #
 # developer: Afroditi Doriti
-# version: 1
-# changes: used no clustering. Directly tf-idf
+# version: 9.0
+# changes: used tf-idf also before clustering and also removed sparce terms
 # description: keyword clustering, subsequent keyword extraction
 # input: polymers_renewable.csv
 # data ownership: MAPEGY
@@ -11,10 +11,14 @@
 
 # load packages ----
 library("tidyverse")
+library("tm")
 library("SnowballC")
 library("doParallel")
 library("tidytext")
 library("tictoc")
+library("fastcluster")
+library("parallelDist")
+library("Matrix")
 
 # list.of.packages <- c("ggplot2", "Rcpp")
 # new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
@@ -22,6 +26,7 @@ library("tictoc")
 
 # start measuring time
 tic("total")
+tic("preprocessing")
 
 # use doParallel for speed ----
 # Choose a number of cores to use (1 less than detected)
@@ -58,11 +63,107 @@ relevant_data <-
     stringsAsFactors = FALSE
   )
 
-# merge title and abstract
-to_analyze <- relevant_data %>% unite(texts, title, abstract, sep = " ")
+# Create corpus
+docs <- Corpus(DataframeSource(relevant_data))
 
-# add document number
-to_analyze$cluster <- rownames(to_analyze)
+#Transform to lower case
+docs <- tm_map(docs, content_transformer(tolower))
+
+#remove potentiallyy problematic symbols
+toSpace <-
+  content_transformer(function(x, pattern) {
+    return (gsub(pattern, " ", x))
+  })
+docs <- tm_map(docs, toSpace, "http[[:alnum:][:punct:]]*")
+docs <- tm_map(docs, toSpace, "www[[:alnum:][:punct:]]*")
+docs <- tm_map(docs, toSpace, "-")
+docs <- tm_map(docs, toSpace, ":")
+docs <- tm_map(docs, toSpace, "â")
+docs <- tm_map(docs, toSpace, "â¢")
+docs <- tm_map(docs, toSpace, "â¢    ")
+docs <- tm_map(docs, toSpace, " -")
+docs <- tm_map(docs, toSpace, "â")
+docs <- tm_map(docs, toSpace, "â")
+
+#remove punctuation
+docs <- tm_map(docs, removePunctuation)
+
+#Strip digits
+docs <- tm_map(docs, removeNumbers)
+
+# remove words in other alphabets
+docs <- tm_map(docs, content_transformer(function(s) {
+  gsub(
+    pattern = '[^a-zA-Z0-9\\s]+',
+    x = s,
+    replacement = " ",
+    ignore.case = TRUE,
+    perl = TRUE
+  )
+}))
+
+#remove stopwords
+docs <- tm_map(docs, removeWords, stopwords("english"))
+
+#remove whitespace
+docs <- tm_map(docs, stripWhitespace)
+
+# create backup
+backup <- docs
+
+# stem the words - i.e. truncate words to their base form
+docs <- tm_map(docs, stemDocument, mc.cores = 1)
+# if mc.cores=1 not used: Warning message:
+#   In mclapply(content(x), FUN, ...) :
+#   all scheduled cores encountered errors in user code
+
+# create backup
+backup <- docs
+
+# Hierarchical Clustering ----
+# create DocumentTermMatrix
+dtm <- DocumentTermMatrix(docs)
+
+# convert dtm to matrix
+matrix_dtm <- as.matrix(dtm)
+# write as csv file (optional)
+# write.csv(m, file = "dtmatrix1000.csv")
+
+#compute distance between document vectors
+d <- parDist(matrix_dtm, method = "euclidean", threads = no_cores)
+
+# run hierarchical clustering using Wardâs method
+groups <- hclust(d, method = "ward.D")
+# plot dendogram, use hang to ensure that labels fall below tree
+# plot(groups, hang = -1)
+
+# calculate number of clusters according to m*n/t (check wikipedia)
+t <- nnzero(matrix_dtm) # number of non zero elements
+m <- nrow(matrix_dtm) # number of documents
+n <- ncol(matrix_dtm) # number of terms
+num_subtrees <- round(m*n/t)
+
+# cut into subtrees
+# rect.hclust(groups, num_subtrees)
+
+# cut the tree into nrow/10 clusters
+cut <- cutree(groups, k = num_subtrees)
+
+# time for preprocessing
+preprocessing <- toc()
+
+# time for keyword extraction
+tic("keyword extraction")
+
+# Analyze clusters with tf-idf ----
+# add cluster info to the dataframe
+datadf <- cbind(relevant_data, cluster = cut)
+
+# arrange according to cluster
+datadf <- datadf %>% arrange(cluster)
+
+# merge title and abstract
+to_analyze <- datadf %>% unite(texts, title, abstract, sep = " ")
 
 # (optional) write the results in a csv
 # write.csv(to_analyze, "to_analyze.csv")
@@ -162,15 +263,15 @@ tetragrams_separated <- tetragram_tf_idf %>%
 
 # choose text_words to show
 final_text_words <- text_words %>%
-  filter(!words %in% bigrams_separated$word1[1:20]) %>%
-  filter(!words %in% bigrams_separated$word2[1:20])
+  filter(!words %in% bigrams_separated$word1[1:10]) %>%
+  filter(!words %in% bigrams_separated$word2[1:10])
 
 # choose bigrams to show
 final_bigrams <- bigram_tf_idf %>%
   separate(bigrams, c("word1", "word2"), sep = " ") %>%
-  filter(!word1 %in% trigrams_separated$word1[1:20]) %>%
-  filter(!word1 %in% trigrams_separated$word2[1:20]) %>%
-  filter(!word1 %in% trigrams_separated$word3[1:20]) %>%
+  filter(!word1 %in% trigrams_separated$word1[1:10]) %>%
+  filter(!word1 %in% trigrams_separated$word2[1:10]) %>%
+  filter(!word1 %in% trigrams_separated$word3[1:10]) %>%
   filter(!word1 %in% tetragrams_separated$word1[1:10]) %>%
   filter(!word1 %in% tetragrams_separated$word2[1:10]) %>%
   filter(!word1 %in% tetragrams_separated$word3[1:10]) %>%
@@ -214,3 +315,4 @@ total_time <- toc()
 
 # Stop Cluster ----
 stopCluster(cl)
+
