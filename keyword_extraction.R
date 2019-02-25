@@ -1,7 +1,7 @@
 # ------ keyword extraction ----- #
 # developer: Afroditi Doriti
-# version: 9.0
-# changes: used tf-idf also before clustering and also removed sparce terms
+# version: 10.0
+# changes: used parallelDist and only patents
 # description: keyword clustering, subsequent keyword extraction
 # input: polymers_renewable.csv
 # data ownership: MAPEGY
@@ -53,13 +53,15 @@ data <- read.csv(input_file, stringsAsFactors = FALSE, sep = ";")
 
 # Data preprocessing ----
 # sort data according to score_relevance
-data <- data %>% arrange(desc(score_relevance))
+data <- data %>% arrange(desc(score_relevance)) %>%
+  filter(doc_type == "PATENT") %>%
+  unite(text, title, abstract, sep = " ")
 
 # create dataframe only with title and abstract
 relevant_data <-
   data.frame(
-    title = data$title[1:1000],
-    abstract = data$abstract[1:1000],
+    doc_id = 1:1000,
+    text = data$text[1:1000],
     stringsAsFactors = FALSE
   )
 
@@ -124,6 +126,9 @@ backup <- docs
 # create DocumentTermMatrix
 dtm <- DocumentTermMatrix(docs)
 
+# remove sparse items
+dtm <- removeSparseTerms(dtm, 0.9)
+
 # convert dtm to matrix
 matrix_dtm <- as.matrix(dtm)
 # write as csv file (optional)
@@ -141,7 +146,7 @@ groups <- hclust(d, method = "ward.D")
 t <- nnzero(matrix_dtm) # number of non zero elements
 m <- nrow(matrix_dtm) # number of documents
 n <- ncol(matrix_dtm) # number of terms
-num_subtrees <- round(m*n/t)
+num_subtrees <- round(m * n / t)
 
 # cut into subtrees
 # rect.hclust(groups, num_subtrees)
@@ -157,20 +162,14 @@ tic("keyword extraction")
 
 # Analyze clusters with tf-idf ----
 # add cluster info to the dataframe
-datadf <- cbind(relevant_data, cluster = cut)
-
-# arrange according to cluster
-datadf <- datadf %>% arrange(cluster)
-
-# merge title and abstract
-to_analyze <- datadf %>% unite(texts, title, abstract, sep = " ")
+to_analyze <- cbind(relevant_data, cluster = cut)
 
 # (optional) write the results in a csv
 # write.csv(to_analyze, "to_analyze.csv")
 
 # tokenize the texts and avoid stopwords
 text_words <- to_analyze %>%
-  unnest_tokens(words, texts) %>%
+  unnest_tokens(words, text) %>%
   filter(!words %in% stop_words$word) %>%
   filter(is.na(as.numeric(words))) %>%
   count(cluster, words, sort = TRUE) %>%
@@ -198,18 +197,20 @@ text_words <- text_words %>%
 # Bigrams, trigrams, and tetragrams ----
 # check for bigrams
 text_bigrams <- to_analyze %>%
-  unnest_tokens(bigrams, texts, token = "ngrams", n = 2) %>%
+  unnest_tokens(bigrams, text, token = "ngrams", n = 2) %>%
   separate(bigrams, c("word1", "word2"), sep = " ") %>%
-  filter(!word1 %in% stop_words$word,!word2 %in% stop_words$word) %>%
+  filter(!word1 %in% stop_words$word, !word2 %in% stop_words$word) %>%
   filter(is.na(as.numeric(word1)), is.na(as.numeric(word2))) %>%
   count(cluster, word1, word2, sort = TRUE) %>%
   unite(bigrams, word1, word2, sep = " ")
 
 # check for trigrams:
 text_trigrams <- to_analyze %>%
-  unnest_tokens(trigrams, texts, token = "ngrams", n = 3) %>%
+  unnest_tokens(trigrams, text, token = "ngrams", n = 3) %>%
   separate(trigrams, c("word1", "word2", "word3"), sep = " ") %>%
-  filter(!word1 %in% stop_words$word,!word2 %in% stop_words$word,!word3 %in% stop_words$word) %>%
+  filter(!word1 %in% stop_words$word,
+         !word2 %in% stop_words$word,
+         !word3 %in% stop_words$word) %>%
   filter(is.na(as.numeric(word1)), is.na(as.numeric(word2)),
          is.na(as.numeric(word3))) %>%
   count(cluster, word1, word2, word3, sort = TRUE) %>%
@@ -217,12 +218,11 @@ text_trigrams <- to_analyze %>%
 
 # check for tetragrams:
 text_tetragrams <- to_analyze %>%
-  unnest_tokens(tetragrams, texts, token = "ngrams", n = 4) %>%
+  unnest_tokens(tetragrams, text, token = "ngrams", n = 4) %>%
   separate(tetragrams, c("word1", "word2", "word3", "word4"), sep = " ") %>%
   filter(
-    !word1 %in% stop_words$word,
-    !word2 %in% stop_words$word,!word3 %in% stop_words$word,
-    !word4 %in% stop_words$word
+    !word1 %in% stop_words$word,!word2 %in% stop_words$word,
+    !word3 %in% stop_words$word,!word4 %in% stop_words$word
   ) %>%
   count(cluster, word1, word2, word3, word4, sort = TRUE) %>%
   unite(tetragrams, word1, word2, word3, word4, sep = " ")
@@ -315,4 +315,3 @@ total_time <- toc()
 
 # Stop Cluster ----
 stopCluster(cl)
-
