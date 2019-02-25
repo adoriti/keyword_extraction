@@ -17,7 +17,6 @@ library("doParallel")
 library("tidytext")
 library("tictoc")
 library("fastcluster")
-library("parallelDist")
 library("Matrix")
 
 # list.of.packages <- c("ggplot2", "Rcpp")
@@ -134,11 +133,8 @@ matrix_dtm <- as.matrix(dtm)
 # write as csv file (optional)
 # write.csv(m, file = "dtmatrix1000.csv")
 
-#compute distance between document vectors
-d <- parDist(matrix_dtm, method = "euclidean", threads = no_cores)
-
 # run hierarchical clustering using Wardâs method
-groups <- hclust(d, method = "ward.D")
+groups <- hclust.vector(dtm, method = "ward", metric = "euclidean")
 # plot dendogram, use hang to ensure that labels fall below tree
 # plot(groups, hang = -1)
 
