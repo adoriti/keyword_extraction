@@ -17,7 +17,9 @@ library("doParallel")
 library("tidytext")
 library("tictoc")
 library("fastcluster")
+library("parallelDist")
 library("Matrix")
+library("lsa")
 
 # list.of.packages <- c("ggplot2", "Rcpp")
 # new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
@@ -53,8 +55,9 @@ data <- read.csv(input_file, stringsAsFactors = FALSE, sep = ";")
 # Data preprocessing ----
 # sort data according to score_relevance
 data <- data %>% arrange(desc(score_relevance)) %>%
-  filter(doc_type == "PATENT") %>%
-  unite(text, title, abstract, sep = " ")
+  filter(doc_type == "PATENT") %>% # select only patents
+  distinct(title, abstract, .keep_all = TRUE) %>% # remove duplicates of text
+  unite(text, title, abstract, sep = " ") 
 
 # create dataframe only with title and abstract
 relevant_data <-
@@ -113,7 +116,7 @@ docs <- tm_map(docs, stripWhitespace)
 backup <- docs
 
 # stem the words - i.e. truncate words to their base form
-docs <- tm_map(docs, stemDocument, mc.cores = 1)
+docs <- tm_map(docs, stemDocument)
 # if mc.cores=1 not used: Warning message:
 #   In mclapply(content(x), FUN, ...) :
 #   all scheduled cores encountered errors in user code
@@ -126,17 +129,75 @@ backup <- docs
 dtm <- DocumentTermMatrix(docs)
 
 # remove sparse items
-dtm <- removeSparseTerms(dtm, 0.9)
+dtm <- removeSparseTerms(dtm, 0.99) 
 
 # convert dtm to matrix
 matrix_dtm <- as.matrix(dtm)
 # write as csv file (optional)
 # write.csv(m, file = "dtmatrix1000.csv")
 
+dtm.tfidf <- tm::weightTfIdf(dtm)
+dtm.tfidf <- tm::removeSparseTerms(dtm.tfidf, 0.999) 
+tfidf.matrix <- as.matrix(dtm.tfidf) 
+
+# Cosine distance matrix (useful for specific clustering algorithms) 
+dist.matrix = proxy::dist(tfidf.matrix, method = "cosine") 
+
+groups <- hclust(dist.matrix, method = "ward.D")
+
+clustering.kmeans <- kmeans(tfidf.matrix, num_subtrees) 
+clustering.hierarchical <- hclust(dist.matrix, method = "ward.D2") 
+clustering.dbscan <- dbscan::hdbscan(dist.matrix, minPts = 10) 
+
+master.cluster <- clustering.kmeans$cluster 
+slave.hierarchical <- cutree(clustering.hierarchical, k = num_subtrees) 
+slave.dbscan <- clustering.dbscan$cluster 
+stacked.clustering <- rep(NA, length(master.cluster))  
+names(stacked.clustering) <- 1:length(master.cluster) 
+
+for (cluster in unique(master.cluster)) { 
+  indexes = which(master.cluster == cluster, arr.ind = TRUE) 
+  slave1.votes <- table(slave.hierarchical[indexes]) 
+  slave1.maxcount <- names(slave1.votes)[which.max(slave1.votes)]   
+  slave1.indexes = which(slave.hierarchical == slave1.maxcount, arr.ind = TRUE) 
+  slave2.votes <- table(slave.dbscan[indexes]) 
+  slave2.maxcount <- names(slave2.votes)[which.max(slave2.votes)]   
+  stacked.clustering[indexes] <- slave2.maxcount 
+} 
+
+points <- cmdscale(dist.matrix, k = 2) 
+palette <- colorspace::diverge_hcl(num_subtrees) # Creating a color palette 
+previous.par <- par(mfrow=c(2,2), mar = rep(1.5, 4)) 
+
+plot(points, main = 'K-Means clustering', col = as.factor(master.cluster), 
+     mai = c(0, 0, 0, 0), mar = c(0, 0, 0, 0), 
+     xaxt = 'n', yaxt = 'n', xlab = '', ylab = '') 
+
+plot(points, main = 'Hierarchical clustering', col = as.factor(slave.hierarchical), 
+     mai = c(0, 0, 0, 0), mar = c(0, 0, 0, 0),  
+     xaxt = 'n', yaxt = 'n', xlab = '', ylab = '') 
+
+plot(points, main = 'Density-based clustering', col = as.factor(slave.dbscan), 
+     mai = c(0, 0, 0, 0), mar = c(0, 0, 0, 0), 
+     xaxt = 'n', yaxt = 'n', xlab = '', ylab = '') 
+
+plot(points, main = 'Stacked clustering', col = as.factor(stacked.clustering), 
+     mai = c(0, 0, 0, 0), mar = c(0, 0, 0, 0), 
+     xaxt = 'n', yaxt = 'n', xlab = '', ylab = '') 
+
+par(previous.par) # recovering the original plot space parameters 
+
+# compute cosine similarity
+cosine_similarities <- cosine(t(matrix_dtm))
+
+#compute distance between document vectors
+cosine_distance <- as.dist(1-(t(cosine(t(matrix_dtm)))))
+
 # run hierarchical clustering using Wardâs method
-groups <- hclust.vector(dtm, method = "ward", metric = "euclidean")
+groups <- hclust(cosine_distance, method = "ward.D")
 # plot dendogram, use hang to ensure that labels fall below tree
 # plot(groups, hang = -1)
+
 
 # calculate number of clusters according to m*n/t (check wikipedia)
 t <- nnzero(matrix_dtm) # number of non zero elements
@@ -161,7 +222,7 @@ tic("keyword extraction")
 to_analyze <- cbind(relevant_data, cluster = cut)
 
 # (optional) write the results in a csv
-# write.csv(to_analyze, "to_analyze.csv")
+write.csv(to_analyze, "to_analyze_90.csv")
 
 # tokenize the texts and avoid stopwords
 text_words <- to_analyze %>%
@@ -305,6 +366,22 @@ for (i in 1:10) {
 
 # time elapsed for keyword extraction
 keyword_extraction <- toc()
+
+# per cluster
+for (i in 1:num_subtrees) {
+  clustered <- to_analyze$cluster == i
+  print(i)
+  print(suppressWarnings(keywords_tf_idf(to_analyze[clustered, ])))
+}
+
+for (i in 1:num_subtrees) {
+  clustered <- to_analyze$cluster == i
+  print(i)
+  print(suppressWarnings(keywords(to_analyze[clustered, ])))
+}
+
+suppressWarnings(keywords_tf_idf(to_analyze[to_analyze$cluster == 2, ]))
+suppressWarnings(keywords(to_analyze[to_analyze$cluster == 2, ]))
 
 # total time elapsed()
 total_time <- toc()
