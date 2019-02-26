@@ -1,7 +1,7 @@
 # ------ keyword extraction ----- #
 # developer: Afroditi Doriti
-# version: 10.0
-# changes: used parallelDist and only patents
+# version: 11.0
+# changes: used tf-idf weighted matrix
 # description: keyword clustering, subsequent keyword extraction
 # input: polymers_renewable.csv
 # data ownership: MAPEGY
@@ -10,26 +10,187 @@
 # ------------------------------- #
 
 # load packages ----
-library("tidyverse")
-library("tm")
-library("SnowballC")
-library("doParallel")
-library("tidytext")
-library("tictoc")
-library("fastcluster")
-library("parallelDist")
-library("Matrix")
-library("lsa")
+if (!require("pacman")) install.packages("pacman")
 
-# list.of.packages <- c("ggplot2", "Rcpp")
-# new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
-# if(length(new.packages)) install.packages(new.packages)
+pacman::p_load("tidyverse", "tm", "SnowballC", "doParallel",
+               "tidytext", "tictoc", "fastcluster", "parallelDist",
+               "Matrix", "lsa", "proxy")
 
 # start measuring time
 tic("total")
 tic("preprocessing")
 
-# use doParallel for speed ----
+# functions ----
+# keywords tf-idf ----
+keywords_tf_idf <- function(dataframe) {
+  # find keywords
+  text_words <- dataframe %>%
+    unnest_tokens(words, text) %>%
+    filter(!words %in% stop_words$word) %>%
+    filter(is.na(as.numeric(words))) %>%
+    filter(str_detect(words, "^[^>]+[A-Za-z\\d]")) %>%
+    count(doc_id, words, sort = TRUE) %>%
+    ungroup() 
+  
+  # check total words per cluster
+  total_words <- text_words %>%
+    group_by(doc_id) %>%
+    summarize(total = sum(n))
+  
+  text_words <- left_join(text_words, total_words)
+  
+  # use tf-idf
+  text_words <- text_words %>%
+    bind_tf_idf(words, doc_id, n)
+  
+  # sort according to tf-idf
+  text_words <- text_words %>%
+    select(-total) %>%
+    arrange(desc(tf_idf))
+  
+  # find bigrams
+  text_bigrams <- dataframe %>%
+    unnest_tokens(bigrams, text, token = "ngrams", n = 2) %>%
+    separate(bigrams, c("word1", "word2"), sep = " ") %>%
+    filter(!word1 %in% stop_words$word,!word2 %in% stop_words$word) %>%
+    filter(is.na(as.numeric(word1)), is.na(as.numeric(word2))) %>%
+    filter(str_detect(word1, "^[^>]+[A-Za-z\\d]"),
+           str_detect(word2, "^[^>]+[A-Za-z\\d]")) %>%
+    count(doc_id, word1, word2, sort = TRUE) %>%
+    unite(bigrams, word1, word2, sep = " ")
+  
+  # check for trigrams:
+  text_trigrams <- dataframe %>%
+    unnest_tokens(trigrams, text, token = "ngrams", n = 3) %>%
+    separate(trigrams, c("word1", "word2", "word3"), sep = " ") %>%
+    filter(
+      !word1 %in% stop_words$word,!word2 %in% stop_words$word,!word3 %in% stop_words$word
+    ) %>%
+    filter(is.na(as.numeric(word1)), is.na(as.numeric(word2)),
+           is.na(as.numeric(word3))) %>%
+    filter(
+      str_detect(word1, "^[^>]+[A-Za-z\\d]"),
+      str_detect(word2, "^[^>]+[A-Za-z\\d]"),
+      str_detect(word3, "^[^>]+[A-Za-z\\d]")
+    ) %>%
+    count(doc_id, word1, word2, word3, sort = TRUE) %>%
+    unite(trigrams, word1, word2, word3, sep = " ")
+  
+  # check for tetragrams:
+  text_tetragrams <- dataframe %>%
+    unnest_tokens(tetragrams, text, token = "ngrams", n = 4) %>%
+    separate(tetragrams, c("word1", "word2", "word3", "word4"), sep = " ") %>%
+    filter(
+      !word1 %in% stop_words$word,
+      !word2 %in% stop_words$word,!word3 %in% stop_words$word,
+      !word4 %in% stop_words$word
+    ) %>%
+    filter(
+      str_detect(word1, "^[^>]+[A-Za-z\\d]"),
+      str_detect(word2, "^[^>]+[A-Za-z\\d]"),
+      str_detect(word3, "^[^>]+[A-Za-z\\d]"),
+      str_detect(word4, "^[^>]+[A-Za-z\\d]")
+    ) %>%
+    count(doc_id, word1, word2, word3, word4, sort = TRUE) %>%
+    unite(tetragrams, word1, word2, word3, word4, sep = " ")
+  
+  # bigrams analysis with tf-idf
+  bigram_tf_idf <- text_bigrams %>%
+    bind_tf_idf(bigrams, doc_id, n) %>%
+    arrange(desc(tf_idf))
+  
+  # same for trigrams
+  trigram_tf_idf <- text_trigrams %>%
+    bind_tf_idf(trigrams, doc_id, n) %>%
+    arrange(desc(tf_idf))
+  
+  # same for tetragrams
+  tetragram_tf_idf <- text_tetragrams %>%
+    bind_tf_idf(tetragrams, doc_id, n) %>%
+    arrange(desc(tf_idf))
+  
+  result <-
+    c(
+      unique(text_words$words[1:5]),
+      unique(text_bigrams$bigrams[1:5]),
+      unique(text_trigrams$trigrams[1:5]),
+      unique(text_tetragrams$tetragrams[1:5])
+    )
+  
+  return(result)
+}
+
+# keywords ----
+keywords <- function(dataframe) {
+  # find keywords
+  text_words <- dataframe %>%
+    unnest_tokens(words, text) %>%
+    filter(!words %in% stop_words$word) %>%
+    filter(is.na(as.numeric(words))) %>%
+    filter(str_detect(words, "^[^>]+[A-Za-z\\d]")) %>%
+    count(doc_id, words, sort = TRUE) %>%
+    ungroup() %>%
+    count(words, sort = TRUE)
+  
+  # find bigrams
+  text_bigrams <- dataframe %>%
+    unnest_tokens(bigrams, text, token = "ngrams", n = 2) %>%
+    separate(bigrams, c("word1", "word2"), sep = " ") %>%
+    filter(!word1 %in% stop_words$word,!word2 %in% stop_words$word) %>%
+    filter(is.na(as.numeric(word1)), is.na(as.numeric(word2))) %>%
+    filter(str_detect(word1, "^[^>]+[A-Za-z\\d]"),
+           str_detect(word2, "^[^>]+[A-Za-z\\d]")) %>%
+    count(doc_id, word1, word2, sort = TRUE) %>%
+    unite(bigrams, word1, word2, sep = " ")
+  
+  # check for trigrams:
+  text_trigrams <- dataframe %>%
+    unnest_tokens(trigrams, text, token = "ngrams", n = 3) %>%
+    separate(trigrams, c("word1", "word2", "word3"), sep = " ") %>%
+    filter(
+      !word1 %in% stop_words$word,!word2 %in% stop_words$word,!word3 %in% stop_words$word
+    ) %>%
+    filter(is.na(as.numeric(word1)), is.na(as.numeric(word2)),
+           is.na(as.numeric(word3))) %>%
+    filter(
+      str_detect(word1, "^[^>]+[A-Za-z\\d]"),
+      str_detect(word2, "^[^>]+[A-Za-z\\d]"),
+      str_detect(word3, "^[^>]+[A-Za-z\\d]")
+    ) %>%
+    count(doc_id, word1, word2, word3, sort = TRUE) %>%
+    unite(trigrams, word1, word2, word3, sep = " ")
+  
+  # check for tetragrams:
+  text_tetragrams <- dataframe %>%
+    unnest_tokens(tetragrams, text, token = "ngrams", n = 4) %>%
+    separate(tetragrams, c("word1", "word2", "word3", "word4"), sep = " ") %>%
+    filter(
+      !word1 %in% stop_words$word,
+      !word2 %in% stop_words$word,!word3 %in% stop_words$word,
+      !word4 %in% stop_words$word
+    ) %>%
+    filter(
+      str_detect(word1, "^[^>]+[A-Za-z\\d]"),
+      str_detect(word2, "^[^>]+[A-Za-z\\d]"),
+      str_detect(word3, "^[^>]+[A-Za-z\\d]"),
+      str_detect(word4, "^[^>]+[A-Za-z\\d]")
+    ) %>%
+    count(doc_id, word1, word2, word3, word4, sort = TRUE) %>%
+    unite(tetragrams, word1, word2, word3, word4, sep = " ")
+  
+  result <-
+    c(
+      unique(text_words$words[1:5]),
+      unique(text_bigrams$bigrams[1:5]),
+      unique(text_trigrams$trigrams[1:5]),
+      unique(text_tetragrams$tetragrams[1:5])
+    )
+  
+  return(result)
+}
+
+
+# doParallel ----
 # Choose a number of cores to use (1 less than detected)
 no_cores <- detectCores() - 1
 
@@ -128,87 +289,34 @@ backup <- docs
 # create DocumentTermMatrix
 dtm <- DocumentTermMatrix(docs)
 
-# remove sparse items
-dtm <- removeSparseTerms(dtm, 0.99) 
+# make a tf-idf weighted dtm
+dtm_tfidf <- weightTfIdf(dtm)
 
-# convert dtm to matrix
-matrix_dtm <- as.matrix(dtm)
-# write as csv file (optional)
-# write.csv(m, file = "dtmatrix1000.csv")
+# remove sparse terms
+dtm_tfidf <- tm::removeSparseTerms(dtm_tfidf, 0.999)
 
-dtm.tfidf <- tm::weightTfIdf(dtm)
-dtm.tfidf <- tm::removeSparseTerms(dtm.tfidf, 0.999) 
-tfidf.matrix <- as.matrix(dtm.tfidf) 
+# make the dtm into a matrix
+tfidf_matrix <- as.matrix(dtm_tfidf)
 
-# Cosine distance matrix (useful for specific clustering algorithms) 
-dist.matrix = proxy::dist(tfidf.matrix, method = "cosine") 
+# Cosine distance matrix (from pachage "proxy")
+dist_matrix <- dist(tfidf_matrix, method = "cosine")
 
-groups <- hclust(dist.matrix, method = "ward.D")
+# hierarchical clustering
+groups <- hclust(dist_matrix, method = "ward.D")
 
-clustering.kmeans <- kmeans(tfidf.matrix, num_subtrees) 
-clustering.hierarchical <- hclust(dist.matrix, method = "ward.D2") 
-clustering.dbscan <- dbscan::hdbscan(dist.matrix, minPts = 10) 
-
-master.cluster <- clustering.kmeans$cluster 
-slave.hierarchical <- cutree(clustering.hierarchical, k = num_subtrees) 
-slave.dbscan <- clustering.dbscan$cluster 
-stacked.clustering <- rep(NA, length(master.cluster))  
-names(stacked.clustering) <- 1:length(master.cluster) 
-
-for (cluster in unique(master.cluster)) { 
-  indexes = which(master.cluster == cluster, arr.ind = TRUE) 
-  slave1.votes <- table(slave.hierarchical[indexes]) 
-  slave1.maxcount <- names(slave1.votes)[which.max(slave1.votes)]   
-  slave1.indexes = which(slave.hierarchical == slave1.maxcount, arr.ind = TRUE) 
-  slave2.votes <- table(slave.dbscan[indexes]) 
-  slave2.maxcount <- names(slave2.votes)[which.max(slave2.votes)]   
-  stacked.clustering[indexes] <- slave2.maxcount 
-} 
-
-points <- cmdscale(dist.matrix, k = 2) 
-palette <- colorspace::diverge_hcl(num_subtrees) # Creating a color palette 
-previous.par <- par(mfrow=c(2,2), mar = rep(1.5, 4)) 
-
-plot(points, main = 'K-Means clustering', col = as.factor(master.cluster), 
-     mai = c(0, 0, 0, 0), mar = c(0, 0, 0, 0), 
-     xaxt = 'n', yaxt = 'n', xlab = '', ylab = '') 
-
-plot(points, main = 'Hierarchical clustering', col = as.factor(slave.hierarchical), 
-     mai = c(0, 0, 0, 0), mar = c(0, 0, 0, 0),  
-     xaxt = 'n', yaxt = 'n', xlab = '', ylab = '') 
-
-plot(points, main = 'Density-based clustering', col = as.factor(slave.dbscan), 
-     mai = c(0, 0, 0, 0), mar = c(0, 0, 0, 0), 
-     xaxt = 'n', yaxt = 'n', xlab = '', ylab = '') 
-
-plot(points, main = 'Stacked clustering', col = as.factor(stacked.clustering), 
-     mai = c(0, 0, 0, 0), mar = c(0, 0, 0, 0), 
-     xaxt = 'n', yaxt = 'n', xlab = '', ylab = '') 
-
-par(previous.par) # recovering the original plot space parameters 
-
-# compute cosine similarity
-cosine_similarities <- cosine(t(matrix_dtm))
-
-#compute distance between document vectors
-cosine_distance <- as.dist(1-(t(cosine(t(matrix_dtm)))))
-
-# run hierarchical clustering using Wardâs method
-groups <- hclust(cosine_distance, method = "ward.D")
 # plot dendogram, use hang to ensure that labels fall below tree
 # plot(groups, hang = -1)
 
-
 # calculate number of clusters according to m*n/t (check wikipedia)
-t <- nnzero(matrix_dtm) # number of non zero elements
-m <- nrow(matrix_dtm) # number of documents
-n <- ncol(matrix_dtm) # number of terms
+t <- nnzero(tfidf_matrix) # number of non zero elements
+m <- nrow(tfidf_matrix) # number of documents
+n <- ncol(tfidf_matrix) # number of terms
 num_subtrees <- round(m * n / t)
 
 # cut into subtrees
 # rect.hclust(groups, num_subtrees)
 
-# cut the tree into nrow/10 clusters
+# cut the tree into num_subtrees clusters
 cut <- cutree(groups, k = num_subtrees)
 
 # time for preprocessing
@@ -300,11 +408,6 @@ tetragram_tf_idf <- text_tetragrams %>%
   arrange(desc(tf_idf))
 
 # all important results ----
-# text_words
-#
-# bigram_tf_idf
-#
-# trigram_tf_idf
 
 # separate bigrams
 bigrams_separated <- bigram_tf_idf %>%
@@ -380,8 +483,9 @@ for (i in 1:num_subtrees) {
   print(suppressWarnings(keywords(to_analyze[clustered, ])))
 }
 
-suppressWarnings(keywords_tf_idf(to_analyze[to_analyze$cluster == 2, ]))
-suppressWarnings(keywords(to_analyze[to_analyze$cluster == 2, ]))
+# optionally for specific clusters
+# suppressWarnings(keywords_tf_idf(to_analyze[to_analyze$cluster == 1, ]))
+# suppressWarnings(keywords(to_analyze[to_analyze$cluster == 1, ]))
 
 # total time elapsed()
 total_time <- toc()
