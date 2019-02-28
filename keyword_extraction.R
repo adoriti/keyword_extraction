@@ -1,6 +1,6 @@
 # ------ keyword extraction ----- #
 # developer: Afroditi Doriti
-# version: 11.0
+# version: 12.0
 # changes: used parallelDist and only patents
 # description: keyword clustering, subsequent keyword extraction
 # input: polymers_renewable.csv
@@ -10,29 +10,26 @@
 # ------------------------------- #
 
 # load packages ----
-if (!require("pacman"))
+if (!require("pacman")) {
   install.packages("pacman")
+}
 
 pacman::p_load(
-  "tidyverse",
-  "tm",
-  "SnowballC",
-  "doParallel",
-  "tidytext",
-  "tictoc",
-  "fastcluster",
-  "parallelDist",
-  "Matrix",
-  "lsa",
-  "proxy",
-  "spacyr"
+  "tidyverse", # importing, cleaning, visualising 
+  "tm", # text cleaning
+  "SnowballC", # stemming
+  "doParallel", # foreach parallel adaptor
+  "tidytext", # text wrangling
+  "tictoc", # timing
+  "proxy", # cosine distance calculation
+  "spacyr" # pos tagging
 )
 
 # start measuring time
 tic("total")
 tic("preprocessing")
 
-# functions ----
+# function ----
 # keyword tf-idf
 keywords_tf_idf <- function(tokenized_search_query, dataframe) {
   # find keywords ----
@@ -80,24 +77,6 @@ keywords_tf_idf <- function(tokenized_search_query, dataframe) {
     count(doc_id, word1, word2, word3, sort = TRUE) %>%
     unite(trigrams, word1, word2, word3, sep = " ")
   
-  # check for tetragrams:
-  text_tetragrams <- dataframe %>%
-    unnest_tokens(tetragrams, text, token = "ngrams", n = 4) %>%
-    separate(tetragrams, c("word1", "word2", "word3", "word4"), sep = " ") %>%
-    filter(
-      !word1 %in% stop_words$word,
-      !word2 %in% stop_words$word,!word3 %in% stop_words$word,
-      !word4 %in% stop_words$word
-    ) %>%
-    filter(
-      str_detect(word1, "^[^>]+[A-Za-z\\d]"),
-      str_detect(word2, "^[^>]+[A-Za-z\\d]"),
-      str_detect(word3, "^[^>]+[A-Za-z\\d]"),
-      str_detect(word4, "^[^>]+[A-Za-z\\d]")
-    ) %>%
-    count(doc_id, word1, word2, word3, word4, sort = TRUE) %>%
-    unite(tetragrams, word1, word2, word3, word4, sep = " ")
-  
   # tf-idf ----
   # use tf-idf for text_words
   text_words <- text_words %>%
@@ -116,11 +95,6 @@ keywords_tf_idf <- function(tokenized_search_query, dataframe) {
   # same for trigrams
   trigram_tf_idf <- text_trigrams %>%
     bind_tf_idf(trigrams, doc_id, n) %>%
-    arrange(desc(tf_idf))
-  
-  # same for tetragrams
-  tetragram_tf_idf <- text_tetragrams %>%
-    bind_tf_idf(tetragrams, doc_id, n) %>%
     arrange(desc(tf_idf))
   
   # POS tagging ----
@@ -151,15 +125,6 @@ keywords_tf_idf <- function(tokenized_search_query, dataframe) {
       entity = FALSE
     )
   
-  # for tetragrams
-  POS_tetragrams <-
-    spacy_parse(
-      tetragram_tf_idf$tetragrams[1:40],
-      pos = TRUE,
-      lemma = FALSE,
-      entity = FALSE
-    )
-  
   # allowed entities (only keywords or keyphrases that end with a noun are allowed) ----
   # allowed text_words
   allowed_text_words <-
@@ -180,13 +145,6 @@ keywords_tf_idf <- function(tokenized_search_query, dataframe) {
                                        c("NOUN", "PRON", "PRORN", "PART"), ])) /
     3
   
-  # allowed tetragrams
-  allowed_tetragrams <-
-    as.numeric(rownames(POS_tetragrams[POS_tetragrams$token_id == 4 &
-                                         POS_tetragrams$pos %in%
-                                         c("NOUN", "PRON", "PRORN", "PART"), ])) /
-    4
-  
   # separate n-grams (to use in the next part to avoid duplicates) ----
   # separate bigrams
   bigrams_separated <- bigram_tf_idf %>%
@@ -195,10 +153,6 @@ keywords_tf_idf <- function(tokenized_search_query, dataframe) {
   # separate trigrams
   trigrams_separated <- trigram_tf_idf %>%
     separate(trigrams, c("word1", "word2", "word3"), sep = " ")
-  
-  # separate tetragrams
-  tetragrams_separated <- tetragram_tf_idf %>%
-    separate(tetragrams, c("word1", "word2", "word3", "word4"), sep = " ")
   
   # final keywords to use ----
   # here we avoid duplicates in the different n-grams, e.g.
@@ -216,31 +170,17 @@ keywords_tf_idf <- function(tokenized_search_query, dataframe) {
     filter(!word1 %in% trigrams_separated$word1[1:10]) %>%
     filter(!word1 %in% trigrams_separated$word2[1:10]) %>%
     filter(!word1 %in% trigrams_separated$word3[1:10]) %>%
-    filter(!word1 %in% tetragrams_separated$word1[1:10]) %>%
-    filter(!word1 %in% tetragrams_separated$word2[1:10]) %>%
-    filter(!word1 %in% tetragrams_separated$word3[1:10]) %>%
-    filter(!word1 %in% tetragrams_separated$word4[1:10]) %>%
     unite(bigrams, word1, word2, sep = " ")
   
   # choose trigrams to show
-  final_trigrams <- trigram_tf_idf[allowed_trigrams,] %>%
-    separate(trigrams, c("word1", "word2", "word3"), sep = " ") %>%
-    filter(!word1 %in% tetragrams_separated$word1[1:5]) %>%
-    filter(!word1 %in% tetragrams_separated$word2[1:5]) %>%
-    filter(!word1 %in% tetragrams_separated$word3[1:5]) %>%
-    filter(!word1 %in% tetragrams_separated$word4[1:5]) %>%
-    unite(trigrams, word1, word2, word3, sep = " ")
-  
-  # choose tetragrams to show
-  final_tetragrams <- tetragram_tf_idf[allowed_tetragrams,]
+  final_trigrams <- trigram_tf_idf[allowed_trigrams,]
   
   # results ----
   result <-
     c(
       unique(final_text_words$words[1:3]),
-      unique(final_bigrams$bigrams[1:2]),
-      unique(final_trigrams$trigrams[1:2]),
-      unique(text_tetragrams$tetragrams[1:2])
+      unique(final_bigrams$bigrams[1:3]),
+      unique(final_trigrams$trigrams[1:3])
     )
   
   return(result)
@@ -256,7 +196,7 @@ cl <- makeCluster(no_cores)
 # Register Cluster
 registerDoParallel(cl)
 
-# to onfirm how many cores are now "assigned" to R and RStudio
+# to confirm how many cores are now "assigned" to R and RStudio
 # getDoParWorkers()
 
 # set wd and import files ----
@@ -264,15 +204,15 @@ registerDoParallel(cl)
 setwd("/home/adoriti/Documents/Keyword extraction")
 
 # define input file:
-input_file <- "polymers_renewable.csv"
+input_file <- "lignin.csv"
 
 # search query
-search_query <- "polymers renewable"
+search_query <- "lignin"
 search_query <- as.data.frame(search_query)
 search_query$search_query <- as.character(search_query$search_query)
 
 # read file:
-data <- read.csv(input_file, stringsAsFactors = FALSE, sep = ";")
+data <- read.csv(input_file, stringsAsFactors = FALSE, sep = ",")
 
 # Data preprocessing ----
 # sort data according to score_relevance
@@ -284,10 +224,15 @@ data <- data %>% arrange(desc(score_relevance)) %>%
 # create dataframe only with title and abstract
 relevant_data <-
   data.frame(
-    doc_id = 1:1000,
-    text = data$text[1:1000],
+    doc_id = rownames(data),
+    text = data$text,
     stringsAsFactors = FALSE
   )
+
+# take up to 1000 documents
+if (nrow(relevant_data) > 1000) {
+  relevant_data <- relevant_data[1:1000, ]
+}
 
 # Create corpus
 docs <- Corpus(DataframeSource(relevant_data))
@@ -339,9 +284,6 @@ backup <- docs
 
 # stem the words - i.e. truncate words to their base form
 docs <- tm_map(docs, stemDocument)
-# if mc.cores=1 not used: Warning message:
-#   In mclapply(content(x), FUN, ...) :
-#   all scheduled cores encountered errors in user code
 
 # create backup
 backup <- docs
@@ -354,7 +296,7 @@ dtm <- DocumentTermMatrix(docs)
 dtm_tfidf <- weightTfIdf(dtm)
 
 # remove sparse terms
-dtm_tfidf <- tm::removeSparseTerms(dtm_tfidf, 0.999)
+dtm_tfidf <- removeSparseTerms(dtm_tfidf, 0.999)
 
 # make the dtm into a matrix
 tfidf_matrix <- as.matrix(dtm_tfidf)
@@ -406,7 +348,7 @@ for (i in 1:num_subtrees) {
 
 # optionally for specific clusters
 suppressWarnings(keywords_tf_idf(tokenized_search_query,
-                                 to_analyze[to_analyze$cluster == 2, ]))
+                                 to_analyze[to_analyze$cluster == 21, ]))
 
 # total time elapsed()
 total_time <- toc()
